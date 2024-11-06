@@ -7,8 +7,14 @@ use std::io::Read;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <file>", args[0]);
+        eprintln!("Usage: {} <file> <verbose - optional>", args[0]);
         std::process::exit(1);
+    }
+
+    let mut verbose = false;
+
+    if args.len() == 3 {
+        verbose = true;
     }
 
     let file = &args[1];
@@ -30,13 +36,6 @@ fn main() {
             u16::from_be_bytes([buffer[i * 2 + 2], buffer[i * 2 + 3]]);
     }
 
-    println!("Start address: {:#x}", start_addr);
-
-    println!(
-        "Memory: {:?}",
-        &memory[start_addr as usize..(start_addr + 0x20) as usize]
-    );
-
     let mut emulator = Emulator::new(start_addr, memory);
-    emulator.run();
+    emulator.run(verbose);
 }

@@ -7,7 +7,7 @@ use tty_read::{ReaderOptions, TermReader};
 // Very nice!
 impl_enum_try_from!(
     #[repr(u16)]
-    #[derive(PartialEq, Eq, Debug)]
+    #[derive(PartialEq, Eq, Debug, Clone)]
     enum Opcode {
         ADD = 0b0001,
         AND = 0b0101,
@@ -43,7 +43,7 @@ fn sext(value: u16, bit: u16) -> u16 {
 pub struct Emulator {
     memory: [u16; 0x10000],
     registers: [u16; 8],
-    pc: usize,
+    pc: u16,
     psr: u16,
 }
 
@@ -52,12 +52,32 @@ impl Emulator {
         Emulator {
             memory,
             registers: [0; 8],
-            pc: start_addr as usize,
+            pc: start_addr,
             psr: 0,
         }
     }
 
     fn read_mem(&self, addr: usize) -> u16 {
+        if addr == 0xFE02 {
+            let mut exit = false;
+            let mut c = 0;
+            {
+                let options = ReaderOptions::default();
+                let reader = TermReader::open_stdin(&options).expect("failed to open stdin reader");
+                c = reader.read_byte().map(|byte| byte as u16).unwrap_or(0);
+                if c == 0xd {
+                    c = 0xa;
+                }
+                if c == 0x3 {
+                    exit = true;
+                }
+            }
+            if exit {
+                std::process::exit(0);
+            }
+            return c;
+        }
+
         self.memory.get(addr).copied().unwrap_or(0)
     }
 
@@ -79,13 +99,18 @@ impl Emulator {
 
     fn debug(&self, instr: u16, a: u16, b: u16, opcode: Opcode) {
         std::thread::sleep(std::time::Duration::from_millis(10));
-        println!("Registers: {:?}", self.registers);
-        println!("PSR: {:#x}", self.psr)
+        println!("\nRegisters: {:?}", self.registers);
+        println!(
+            "PSR: {:#x} PC: {:#x} a: {:#x} b: {:#x} Opcode: {:?}",
+            self.psr, self.pc, a, b, opcode
+        );
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self, verbose: bool) {
+        self.memory[0xFE00] = 0b1000000000000000;
+
         loop {
-            let instr = self.memory[self.pc];
+            let instr = self.memory[self.pc as usize];
 
             let bits = format!("{:016b}", instr);
             let mut bits = bits
@@ -101,9 +126,11 @@ impl Emulator {
             let a = (instr >> 9) & 0b111;
             let b = (instr >> 6) & 0b111;
 
-            //self.debug(instr, a, b, op);
+            if verbose {
+                self.debug(instr, a, b, op.clone());
+            }
 
-            self.pc += 1;
+            self.pc = self.pc.wrapping_add(1);
 
             match op {
                 Opcode::ADD => {
@@ -139,45 +166,45 @@ impl Emulator {
 
                     let pc_offset = sext(instr & 0b111111111, 9);
                     if (n && nn) || (z && zz) || (p && pp) {
-                        self.pc = (self.pc as i16 + pc_offset as i16) as usize;
+                        self.pc = self.pc.wrapping_add(pc_offset);
                     }
                 }
                 // RET also
                 Opcode::JMP => {
-                    self.pc = self.read_reg(b) as usize;
+                    self.pc = self.read_reg(b);
                 }
                 // JSRR also
                 Opcode::JSR => {
                     self.set_reg(7, self.pc as u16);
                     if bits[11] == 0 {
-                        self.pc = self.read_reg(b) as usize;
+                        self.pc = self.read_reg(b);
                     } else {
-                        let pc_offset = sext(instr & 0b111111111111, 11);
-                        self.pc = (self.pc as i16 + pc_offset as i16) as usize;
+                        let pc_offset = sext(instr & 0b11111111111, 11);
+                        self.pc = self.pc.wrapping_add(pc_offset);
                     }
                 }
                 Opcode::LD => {
                     let pc_offset = sext(instr & 0b111111111, 9);
-                    let value = self.read_mem((self.pc as u16 + pc_offset) as usize);
+                    let value = self.read_mem(self.pc.wrapping_add(pc_offset) as usize);
                     self.set_reg(a, value);
                     self.setcc(value);
                 }
                 Opcode::LDI => {
                     let pc_offset = sext(instr & 0b111111111, 9);
                     let value = self
-                        .read_mem(self.read_mem((self.pc as u16 + pc_offset) as usize) as usize);
+                        .read_mem(self.read_mem(self.pc.wrapping_add(pc_offset) as usize) as usize);
                     self.set_reg(a, value);
                     self.setcc(value);
                 }
                 Opcode::LDR => {
                     let offset = sext(instr & 0b111111, 6);
-                    let value = self.read_mem((self.read_reg(b) + offset) as usize);
+                    let value = self.read_mem(self.read_reg(b).wrapping_add(offset) as usize);
                     self.set_reg(a, value);
                     self.setcc(value);
                 }
                 Opcode::LEA => {
                     let pc_offset = sext(instr & 0b111111111, 9);
-                    let value = self.pc as u16 + pc_offset;
+                    let value = self.pc.wrapping_add(pc_offset);
                     self.set_reg(a, value);
                     self.setcc(value);
                 }
@@ -191,23 +218,21 @@ impl Emulator {
                 }
                 Opcode::ST => {
                     let pc_offset = sext(instr & 0b111111111, 9);
-                    println!(
-                        "ST: {}, {}",
-                        (self.pc as u16 + pc_offset) as usize,
-                        self.read_reg(a)
-                    );
-                    self.set_mem((self.pc as u16 + pc_offset) as usize, self.read_reg(a));
+                    self.set_mem(self.pc.wrapping_add(pc_offset) as usize, self.read_reg(a));
                 }
                 Opcode::STI => {
                     let pc_offset = sext(instr & 0b111111111, 9);
                     self.set_mem(
-                        self.read_mem((self.pc as u16 + pc_offset) as usize) as usize,
+                        self.read_mem(self.pc.wrapping_add(pc_offset) as usize) as usize,
                         self.read_reg(a),
                     );
                 }
                 Opcode::STR => {
                     let offset = sext(instr & 0b111111, 6);
-                    self.set_mem((self.read_reg(b) + offset) as usize, self.read_reg(a));
+                    self.set_mem(
+                        self.read_reg(b).wrapping_add(offset) as usize,
+                        self.read_reg(a),
+                    );
                 }
                 Opcode::TRAP => {
                     self.trap(instr & 0b11111111);
@@ -223,14 +248,25 @@ impl Emulator {
         match vector {
             // GETC
             0x20 => {
-                let options = ReaderOptions::default();
-                let reader = TermReader::open_stdin(&options).expect("failed to open stdin reader");
-                let mut c = reader.read_byte().map(|byte| byte as u16).unwrap_or(0);
-                if c == 0xd {
-                    c = 0xa;
+                let mut c = 0;
+                let mut exit = false;
+                {
+                    let options = ReaderOptions::default();
+                    let reader =
+                        TermReader::open_stdin(&options).expect("failed to open stdin reader");
+                    let mut c = reader.read_byte().map(|byte| byte as u16).unwrap_or(0);
+                    if c == 0xd {
+                        c = 0xa;
+                    }
+                    if c == 0x3 {
+                        exit = true;
+                    }
+                    self.set_reg(0, c);
+                    self.setcc(c);
                 }
-                self.set_reg(0, c);
-                self.setcc(c);
+                if exit {
+                    std::process::exit(0);
+                }
             }
             // OUT
             0x21 => {
@@ -247,6 +283,8 @@ impl Emulator {
                     }
                     print!("{}", c as u8 as char);
                     addr += 1;
+
+                    std::io::stdout().flush().unwrap();
                 }
             }
             // IN
@@ -255,6 +293,7 @@ impl Emulator {
                 std::io::stdout().flush().unwrap();
 
                 let mut c = 0;
+                let mut exit = false;
                 {
                     let options = ReaderOptions::default();
                     let reader =
@@ -263,8 +302,14 @@ impl Emulator {
                     if c == 0xd {
                         c = 0xa;
                     }
+                    if c == 0x3 {
+                        exit = true;
+                    }
                     self.set_reg(0, c);
                     self.setcc(c);
+                }
+                if exit {
+                    std::process::exit(0);
                 }
                 print!("{}", c as u8 as char);
             }
@@ -285,6 +330,8 @@ impl Emulator {
                     if c1 == 0 && c2 == 0 {
                         break;
                     }
+
+                    std::io::stdout().flush().unwrap();
 
                     addr += 1;
                 }
