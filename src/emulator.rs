@@ -2,7 +2,6 @@ extern crate tty_read;
 
 use enum_try_from::impl_enum_try_from;
 use std::io::Write;
-use std::thread;
 use tty_read::{ReaderOptions, TermReader};
 // Very nice!
 impl_enum_try_from!(
@@ -59,8 +58,7 @@ impl Emulator {
 
     fn read_mem(&self, addr: usize) -> u16 {
         if addr == 0xFE02 {
-            let mut exit = false;
-            let mut c = 0;
+            let mut c;
             {
                 let options = ReaderOptions::default();
                 let reader = TermReader::open_stdin(&options).expect("failed to open stdin reader");
@@ -68,11 +66,8 @@ impl Emulator {
                 if c == 0xd {
                     c = 0xa;
                 }
-                if c == 0x3 {
-                    exit = true;
-                }
             }
-            if exit {
+            if c == 0x3 {
                 std::process::exit(0);
             }
             return c;
@@ -97,7 +92,7 @@ impl Emulator {
         }
     }
 
-    fn debug(&self, instr: u16, a: u16, b: u16, opcode: Opcode) {
+    fn debug(&self, a: u16, b: u16, opcode: Opcode) {
         std::thread::sleep(std::time::Duration::from_millis(10));
         println!("\nRegisters: {:?}", self.registers);
         println!(
@@ -127,7 +122,7 @@ impl Emulator {
             let b = (instr >> 6) & 0b111;
 
             if verbose {
-                self.debug(instr, a, b, op.clone());
+                self.debug(a, b, op.clone());
             }
 
             self.pc = self.pc.wrapping_add(1);
@@ -237,7 +232,10 @@ impl Emulator {
                 Opcode::TRAP => {
                     self.trap(instr & 0b11111111);
                 }
-                _ => {}
+                _ => {
+                    println!("Invalid opcode: {:?}", op);
+                    std::process::exit(1);
+                }
             }
         }
     }
@@ -248,23 +246,19 @@ impl Emulator {
         match vector {
             // GETC
             0x20 => {
-                let mut c = 0;
-                let mut exit = false;
+                let mut c;
                 {
                     let options = ReaderOptions::default();
                     let reader =
                         TermReader::open_stdin(&options).expect("failed to open stdin reader");
-                    let mut c = reader.read_byte().map(|byte| byte as u16).unwrap_or(0);
+                    c = reader.read_byte().map(|byte| byte as u16).unwrap_or(0);
                     if c == 0xd {
                         c = 0xa;
-                    }
-                    if c == 0x3 {
-                        exit = true;
                     }
                     self.set_reg(0, c);
                     self.setcc(c);
                 }
-                if exit {
+                if c == 0x3 {
                     std::process::exit(0);
                 }
             }
@@ -292,8 +286,7 @@ impl Emulator {
                 print!("\n> ");
                 std::io::stdout().flush().unwrap();
 
-                let mut c = 0;
-                let mut exit = false;
+                let mut c;
                 {
                     let options = ReaderOptions::default();
                     let reader =
@@ -302,13 +295,10 @@ impl Emulator {
                     if c == 0xd {
                         c = 0xa;
                     }
-                    if c == 0x3 {
-                        exit = true;
-                    }
                     self.set_reg(0, c);
                     self.setcc(c);
                 }
-                if exit {
+                if c == 0x3 {
                     std::process::exit(0);
                 }
                 print!("{}", c as u8 as char);
