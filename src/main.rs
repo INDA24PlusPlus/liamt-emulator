@@ -22,14 +22,21 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut program = Vec::new();
-    for i in (0..buffer.len()).step_by(2) {
-        let instr = ((buffer[i] as u16) << 8) | buffer[i + 1] as u16;
-        program.push(instr);
+    let start_addr = u16::from_be_bytes([buffer[0], buffer[1]]);
+
+    let mut memory = [0; 0x10000];
+    for i in 0..(buffer.len() - 2) / 2 {
+        memory[start_addr as usize + i] =
+            u16::from_be_bytes([buffer[i * 2 + 2], buffer[i * 2 + 3]]);
     }
 
-    println!("Program: {:?}", program);
+    println!("Start address: {:#x}", start_addr);
 
-    let mut emulator = Emulator::new(program);
+    println!(
+        "Memory: {:?}",
+        &memory[start_addr as usize..(start_addr + 0x20) as usize]
+    );
+
+    let mut emulator = Emulator::new(start_addr, memory);
     emulator.run();
 }
