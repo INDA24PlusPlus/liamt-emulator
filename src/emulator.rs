@@ -1,6 +1,9 @@
-use enum_try_from::impl_enum_try_from;
-use std::io::Read;
+extern crate tty_read;
 
+use enum_try_from::impl_enum_try_from;
+use std::io::Write;
+use std::thread;
+use tty_read::{ReaderOptions, TermReader};
 // Very nice!
 impl_enum_try_from!(
     #[repr(u16)]
@@ -74,16 +77,23 @@ impl Emulator {
         }
     }
 
+    fn debug(&self, instr: u16, a: u16, b: u16, opcode: Opcode) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        println!("Registers: {:?}", self.registers);
+        println!("PSR: {:#x}", self.psr)
+    }
+
     pub fn run(&mut self) {
         loop {
             let instr = self.memory[self.pc];
 
             let bits = format!("{:016b}", instr);
-            let bits = bits
+            let mut bits = bits
                 .as_bytes()
                 .iter()
                 .map(|&b| b - b'0')
                 .collect::<Vec<_>>();
+            bits.reverse();
 
             let opcode = instr >> 12;
             let op = Opcode::try_from(opcode).expect("Invalid opcode!");
@@ -91,12 +101,9 @@ impl Emulator {
             let a = (instr >> 9) & 0b111;
             let b = (instr >> 6) & 0b111;
 
-            self.pc += 1;
+            //self.debug(instr, a, b, op);
 
-            println!(
-                "PC: {:#x}, Instr: {:#x}, Opcode: {:?}, A: {}, B: {}",
-                self.pc, instr, op, a, b
-            );
+            self.pc += 1;
 
             match op {
                 Opcode::ADD => {
@@ -104,10 +111,9 @@ impl Emulator {
                         let sr2 = instr & 0b111;
                         self.read_reg(b).wrapping_add(self.read_reg(sr2))
                     } else {
-                        let imm5 = sext(instr, 5);
+                        let imm5 = sext(instr & 0b11111, 5);
                         self.read_reg(b).wrapping_add(imm5)
                     };
-                    println!("ADD: {}, {}", self.read_reg(b), value);
                     self.set_reg(a, value);
                     self.setcc(value);
                 }
@@ -116,7 +122,7 @@ impl Emulator {
                         let sr2 = instr & 0b111;
                         self.read_reg(b) & self.read_reg(sr2)
                     } else {
-                        let imm5 = sext(instr, 5);
+                        let imm5 = sext(instr & 0b11111, 5);
                         self.read_reg(b) & imm5
                     };
                     self.set_reg(a, value);
@@ -127,12 +133,12 @@ impl Emulator {
                     let z = bits[10] == 1;
                     let p = bits[9] == 1;
 
-                    let N = (self.psr >> 2) & 1 == 1;
-                    let Z = (self.psr >> 1) & 1 == 1;
-                    let P = self.psr & 1 == 1;
+                    let nn = (self.psr >> 2) & 1 == 1;
+                    let zz = (self.psr >> 1) & 1 == 1;
+                    let pp = self.psr & 1 == 1;
 
                     let pc_offset = sext(instr & 0b111111111, 9);
-                    if (n && N) || (z && Z) || (p && P) {
+                    if (n && nn) || (z && zz) || (p && pp) {
                         self.pc = (self.pc as i16 + pc_offset as i16) as usize;
                     }
                 }
@@ -214,18 +220,17 @@ impl Emulator {
     fn trap(&mut self, vector: u16) {
         self.set_reg(7, self.pc as u16);
 
-        println!("TRAP: {:#x}", vector);
         match vector {
             // GETC
             0x20 => {
-                let c = std::io::stdin()
-                    .bytes()
-                    .next()
-                    .and_then(|result| result.ok())
-                    .map(|byte| byte as u16)
-                    .unwrap_or(0);
-
+                let options = ReaderOptions::default();
+                let reader = TermReader::open_stdin(&options).expect("failed to open stdin reader");
+                let mut c = reader.read_byte().map(|byte| byte as u16).unwrap_or(0);
+                if c == 0xd {
+                    c = 0xa;
+                }
                 self.set_reg(0, c);
+                self.setcc(c);
             }
             // OUT
             0x21 => {
@@ -246,15 +251,22 @@ impl Emulator {
             }
             // IN
             0x23 => {
-                print!("\nEnter a character: ");
-                let c = std::io::stdin()
-                    .bytes()
-                    .next()
-                    .and_then(|result| result.ok())
-                    .map(|byte| byte as u16)
-                    .unwrap_or(0);
+                print!("\n> ");
+                std::io::stdout().flush().unwrap();
 
-                self.set_reg(0, c);
+                let mut c = 0;
+                {
+                    let options = ReaderOptions::default();
+                    let reader =
+                        TermReader::open_stdin(&options).expect("failed to open stdin reader");
+                    c = reader.read_byte().map(|byte| byte as u16).unwrap_or(0);
+                    if c == 0xd {
+                        c = 0xa;
+                    }
+                    self.set_reg(0, c);
+                    self.setcc(c);
+                }
+                print!("{}", c as u8 as char);
             }
             // PUTSP
             0x24 => {
@@ -287,9 +299,9 @@ impl Emulator {
     }
 
     fn setcc(&mut self, value: u16) {
-        let n = (value >> 15) == 1;
+        let n = (value >> 15) == 1 && value != 0;
         let z = value == 0;
-        let p = (value >> 15) == 0;
+        let p = (value >> 15) == 0 && value != 0;
 
         let mut psr = self.psr;
         psr &= 0b1111111111111000; // Clear the condition codes

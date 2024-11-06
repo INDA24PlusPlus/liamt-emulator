@@ -13,4 +13,29 @@ name = "liamt-emulator"
 version = "0.1.0"
 dependencies = [
  "enum-try-from",
+ "tty-read",
+]
+
+[[package]]
+name = "libc"
+version = "0.2.161"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e9489c2807c139ffd9c1794f4af0ebe86a828db53ecdc7fea2111d0fed085d1"
+
+[[package]]
+name = "termios"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "411c5bf740737c7918b8b1fe232dca4dc9f8e754b8ad5e20966814001ed0ac6b"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "tty-read"
+version = "0.1.0"
+source = "git+https://github.com/timvisee/tty-read-rs#4acaeb222a20c58c7bd69f9728abeceb6746a1b4"
+dependencies = [
+ "libc",
+ "termios",
 ]
